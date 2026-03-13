@@ -66,6 +66,16 @@ lazy_static! {
 }
 
 pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
+    match run_build_internal(args, verbose) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("rtk filter failed: {}, falling back to raw forge build", e);
+            run_build_fallback(args)
+        }
+    }
+}
+
+fn run_build_internal(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
     let mut cmd = Command::new("forge");
@@ -111,7 +121,30 @@ pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
     Ok(())
 }
 
+fn run_build_fallback(args: &[String]) -> Result<()> {
+    let mut cmd = Command::new("forge");
+    cmd.arg("build");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    let status = cmd.status().context("Failed to run forge build")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
 pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    match run_test_internal(args, verbose) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("rtk filter failed: {}, falling back to raw forge test", e);
+            run_test_fallback(args)
+        }
+    }
+}
+
+fn run_test_internal(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
     // cli.verbose captures -v flags that clap eats before trailing_var_arg.
@@ -183,7 +216,30 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
     Ok(())
 }
 
+fn run_test_fallback(args: &[String]) -> Result<()> {
+    let mut cmd = Command::new("forge");
+    cmd.arg("test");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    let status = cmd.status().context("Failed to run forge test")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
 pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
+    match run_other_internal(args, verbose) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            eprintln!("rtk passthrough failed: {}, falling back to raw forge", e);
+            run_other_fallback(args)
+        }
+    }
+}
+
+fn run_other_internal(args: &[OsString], verbose: u8) -> Result<()> {
     if args.is_empty() {
         anyhow::bail!("forge: no subcommand specified");
     }
@@ -222,6 +278,21 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
         std::process::exit(output.status.code().unwrap_or(1));
     }
 
+    Ok(())
+}
+
+fn run_other_fallback(args: &[OsString]) -> Result<()> {
+    if args.is_empty() {
+        anyhow::bail!("forge: no subcommand specified");
+    }
+    let mut cmd = Command::new("forge");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    let status = cmd.status().context("Failed to run forge")?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
     Ok(())
 }
 
@@ -671,6 +742,10 @@ Test result: FAILED. 1 passed; 1 failed;
 
     // --- token savings ---
 
+    fn count_tokens(text: &str) -> usize {
+        text.split_whitespace().count()
+    }
+
     #[test]
     fn test_build_token_savings() {
         let input = "\
@@ -679,10 +754,21 @@ Solc 0.8.24 finished in 843.28ms
 Compiler run successful!
 ";
         let out = filter_forge_build(input);
-        let in_tokens = input.split_whitespace().count();
-        let out_tokens = out.split_whitespace().count();
-        assert_eq!(out_tokens, 0, "pure noise should produce zero output");
-        let _ = in_tokens; // savings = 100%
+        assert_eq!(out, "", "pure noise should produce zero output");
+
+        let in_tokens = count_tokens(input);
+        let out_tokens = count_tokens(&out);
+        let savings_pct = if in_tokens > 0 {
+            100.0 * (1.0 - out_tokens as f64 / in_tokens as f64)
+        } else {
+            0.0
+        };
+
+        assert!(
+            savings_pct >= 95.0,
+            "Expected ≥95% savings on pure noise, got {:.1}%",
+            savings_pct
+        );
     }
 
     #[test]
@@ -696,14 +782,22 @@ Compiler run successful!
 Test result: ok. 5 passed; 0 failed; finished in 1ms
 ";
         let out = filter_forge_test(input, false);
-        let in_tokens = input.split_whitespace().count();
-        let out_tokens = out.split_whitespace().count();
-        // Expect at least 50% reduction on flat results (real savings are much higher with traces)
+
+        let in_tokens = count_tokens(input);
+        let out_tokens = count_tokens(&out);
+        let savings_pct = if in_tokens > 0 {
+            100.0 * (1.0 - out_tokens as f64 / in_tokens as f64)
+        } else {
+            0.0
+        };
+
+        // Expect at least 60% reduction on flat results (real savings are much higher with traces)
         assert!(
-            out_tokens * 2 < in_tokens,
-            "expected >50% reduction, got {}/{} tokens",
-            out_tokens,
-            in_tokens
+            savings_pct >= 60.0,
+            "Expected ≥60% savings, got {:.1}% ({} → {} tokens)",
+            savings_pct,
+            in_tokens,
+            out_tokens
         );
     }
 }
