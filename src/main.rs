@@ -16,6 +16,7 @@ mod dotnet_trx;
 mod env_cmd;
 mod filter;
 mod find_cmd;
+mod forge_cmd;
 mod format_cmd;
 mod gain;
 mod gh_cmd;
@@ -607,6 +608,12 @@ enum Commands {
         args: Vec<String>,
     },
 
+    /// Forge (Foundry) commands with compact output
+    Forge {
+        #[command(subcommand)]
+        command: ForgeCommands,
+    },
+
     /// Go commands with compact output
     Go {
         #[command(subcommand)]
@@ -961,6 +968,25 @@ enum DotnetCommands {
         args: Vec<String>,
     },
     /// Passthrough: runs any unsupported dotnet subcommand directly
+    #[command(external_subcommand)]
+    Other(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum ForgeCommands {
+    /// Build contracts with compact output (errors/warnings only)
+    Build {
+        /// Additional forge build arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Run tests with compact output: failures always shown, passing tests counted only
+    Test {
+        /// Additional forge test arguments (pass -vvvv for compressed traces on failures)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Passthrough: runs any unsupported forge subcommand directly
     #[command(external_subcommand)]
     Other(Vec<OsString>),
 }
@@ -1907,6 +1933,18 @@ fn main() -> Result<()> {
             pip_cmd::run(&args, cli.verbose)?;
         }
 
+        Commands::Forge { command } => match command {
+            ForgeCommands::Build { args } => {
+                forge_cmd::run_build(&args, cli.verbose)?;
+            }
+            ForgeCommands::Test { args } => {
+                forge_cmd::run_test(&args, cli.verbose)?;
+            }
+            ForgeCommands::Other(args) => {
+                forge_cmd::run_other(&args, cli.verbose)?;
+            }
+        },
+
         Commands::Go { command } => match command {
             GoCommands::Test { args } => {
                 go_cmd::run_test(&args, cli.verbose)?;
@@ -2146,6 +2184,7 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Ruff { .. }
             | Commands::Pytest { .. }
             | Commands::Pip { .. }
+            | Commands::Forge { .. }
             | Commands::Go { .. }
             | Commands::GolangciLint { .. }
             | Commands::Gt { .. }
